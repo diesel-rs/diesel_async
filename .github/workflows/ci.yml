@@ -37,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         rust: ["stable"]
-        backend: ["postgres", "mysql", "sqlite"]
+        backend: ["postgres", "mysql", "sqlite", "mariadb"]
         os:
           [
             ubuntu-latest,
@@ -79,6 +79,12 @@ jobs:
           - rust: "nightly"
             backend: "mysql"
             os: "ubuntu-latest"
+          - rust: "nightly"
+            backend: "mariadb"
+            os: "ubuntu-latest"
+          - rust: "beta"
+            backend: "mariadb"
+            os: "ubuntu-latest"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout sources
@@ -93,7 +99,7 @@ jobs:
 
       - name: Set environment variables
         shell: bash
-        if: matrix.backend == 'mysql'
+        if: matrix.backend == 'mysql' || matrix.backend == 'mariadb'
         run: |
           echo "RUST_TEST_THREADS=1" >> $GITHUB_ENV
 
@@ -144,6 +150,25 @@ jobs:
           mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'root'@'localhost';" -uroot -proot
           echo "DATABASE_URL=mysql://root:root@localhost/diesel_test" >> $GITHUB_ENV
 
+      - name: Install mariadb (Linux)
+        if: runner.os == 'Linux' && matrix.backend == 'mariadb'
+        run: |
+          # apt ships only MariaDB 10.x, so the 13.0 server comes from the official image
+          docker run -d --name mariadb13 -e MARIADB_ROOT_PASSWORD=root -p 3306:3306 mariadb:13.0
+          # -h forces a TCP ping, which only succeeds once the entrypoint's init server is gone
+          for i in $(seq 1 60); do
+            if docker exec mariadb13 mariadb-admin ping -h 127.0.0.1 -uroot -proot --silent >/dev/null 2>&1; then
+              break
+            fi
+            echo "Waiting for MariaDB 13 to accept connections ($i)..."
+            sleep 2
+          done
+          docker exec mariadb13 mariadb-admin ping -h 127.0.0.1 -uroot -proot --silent >/dev/null 2>&1 || { echo "MariaDB 13 did not become ready in time"; docker logs mariadb13; exit 1; }
+          docker exec mariadb13 mariadb -uroot -proot -e "create database diesel_test; create database diesel_unit_test;"
+          docker exec mariadb13 mariadb -h 127.0.0.1 -uroot -proot -e "SELECT VERSION();"
+          echo "DATABASE_URL=mariadb://root:root@localhost/diesel_test" >> $GITHUB_ENV
+          
+
       - name: Install sqlite (Linux)
         if: runner.os == 'Linux' && matrix.backend == 'sqlite'
         run: |
@@ -176,6 +201,17 @@ jobs:
           /usr/local/opt/mariadb@11.4/bin/mysqladmin -u runner password diesel
           /usr/local/opt/mariadb@11.4/bin/mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'runner'@'localhost';" -urunner
           echo "DATABASE_URL=mysql://runner:diesel@localhost/diesel_test" >> $GITHUB_ENV
+          
+      - name: Install mariadb (MacOS Intel)
+        if: matrix.os == 'macos-15-intel' && matrix.backend == 'mariadb'
+        run: |
+          brew install mariadb@11.4
+          /usr/local/opt/mariadb@11.4/bin/mysql_install_db
+          /usr/local/opt/mariadb@11.4/bin/mysql.server start
+          sleep 3
+          /usr/local/opt/mariadb@11.4/bin/mysqladmin -u runner password diesel
+          /usr/local/opt/mariadb@11.4/bin/mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'runner'@'localhost';" -urunner
+          echo "DATABASE_URL=mariadb://runner:diesel@localhost/diesel_test" >> $GITHUB_ENV
 
       - name: Install mysql (MacOS M1)
         if: matrix.os == 'macos-26' && matrix.backend == 'mysql'
@@ -188,6 +224,18 @@ jobs:
           /opt/homebrew/opt/mariadb@11.4/bin/mysqladmin -u runner password diesel
           /opt/homebrew/opt/mariadb@11.4/bin/mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'runner'@'localhost';" -urunner
           echo "DATABASE_URL=mysql://runner:diesel@localhost/diesel_test" >> $GITHUB_ENV
+          
+      - name: Install mariadb (MacOS M1)
+        if: matrix.os == 'macos-26' && matrix.backend == 'mariadb'
+        run: |
+          brew install mariadb@11.4
+          ls /opt/homebrew/opt/mariadb@11.4
+          /opt/homebrew/opt/mariadb@11.4/bin/mysql_install_db
+          /opt/homebrew/opt/mariadb@11.4/bin/mysql.server start
+          sleep 3
+          /opt/homebrew/opt/mariadb@11.4/bin/mysqladmin -u runner password diesel
+          /opt/homebrew/opt/mariadb@11.4/bin/mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'runner'@'localhost';" -urunner
+          echo "DATABASE_URL=mariadb://runner:diesel@localhost/diesel_test" >> $GITHUB_ENV
 
       - name: Install postgres (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'postgres'
@@ -207,12 +255,27 @@ jobs:
           "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysql" -e "create database diesel_test;" -u root
           "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysql" -e "create database diesel_unit_test;" -u root
           "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysql" -e 'grant all on `diesel_%`.* to 'root'@'localhost';' -uroot
+          
+      - name: Install mariadb (Windows)
+        if: runner.os == 'Windows' && matrix.backend == 'mariadb'
+        shell: bash
+        run: |
+          choco install mariadb --version=12.3.2 -y
+          "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e "create database diesel_test;" -u root
+          "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e "create database diesel_unit_test;" -u root
+          "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e 'grant all on `diesel_%`.* to 'root'@'localhost';' -uroot
 
       - name: Set variables for mysql (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'mysql'
         shell: bash
         run: |
           echo "DATABASE_URL=mysql://root@localhost/diesel_test" >> $GITHUB_ENV
+          
+      - name: Set variables for mariadb (Windows)
+        if: runner.os == 'Windows' && matrix.backend == 'mariadb'
+        shell: bash
+        run: |
+          echo "DATABASE_URL=mariadb://root@localhost/diesel_test" >> $GITHUB_ENV
 
       - name: Install sqlite (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'sqlite'

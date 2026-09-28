@@ -69,7 +69,7 @@ features = [
 version = "2.3.0"
 
 [features]
-default = []
+default = ["mysql"]
 mysql = [
   "diesel/mysql_backend",
   "__mysql_like_shared",

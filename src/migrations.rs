@@ -63,6 +63,13 @@ use crate::AsyncConnection;
 /// #     config
 /// #  }
 /// #
+/// # #[cfg(all(feature = "mariadb", feature = "deadpool"))]
+/// # fn get_config() -> AsyncDieselConnectionManager<diesel_async::AsyncMariadbConnection> {
+/// #     let db_url = database_url_from_env("MARIADB_DATABASE_URL");
+/// #    let config = AsyncDieselConnectionManager::<diesel_async::AsyncMariadbConnection>::new(db_url);
+/// #     config
+/// #  }
+/// #
 /// # #[cfg(all(feature = "sqlite", feature = "deadpool"))]
 /// # fn get_config() -> AsyncDieselConnectionManager<diesel_async::sync_connection_wrapper::SyncConnectionWrapper<diesel::SqliteConnection>> {
 /// #     let db_url = database_url_from_env("SQLITE_DATABASE_URL");
