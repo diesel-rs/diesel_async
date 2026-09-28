@@ -8,7 +8,11 @@ use crate::mysql_like::UrlHelper;
 use crate::stmt_cache::QueryFragmentHelper;
 
 use super::mysql_like::AsyncMysqlLikeConnection;
-pub use super::mysql_like::MysqlLikeCancelToken as MariadbCancelToken;
+use super::mysql_like::MysqlLikeCancelToken;
+
+/// The capability to request cancellation of in-progress queries on a
+/// connection.
+pub type MariadbCancelToken = MysqlLikeCancelToken<Mariadb>;
 
 /// A connection to a Mariadb database. Connection URLs should be in the form
 /// `mariadb://[user[:password]@]host/database_name`

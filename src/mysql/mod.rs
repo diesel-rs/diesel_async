@@ -8,7 +8,11 @@ use crate::mysql_like::UrlHelper;
 use crate::stmt_cache::QueryFragmentHelper;
 
 use super::mysql_like::AsyncMysqlLikeConnection;
-pub use super::mysql_like::MysqlLikeCancelToken as MysqlCancelToken;
+use super::mysql_like::MysqlLikeCancelToken;
+
+/// The capability to request cancellation of in-progress queries on a
+/// connection.
+pub type MysqlCancelToken = MysqlLikeCancelToken<Mysql>;
 
 /// A connection to a MySQL database. Connection URLs should be in the form
 /// `mysql://[user[:password]@]host/database_name`

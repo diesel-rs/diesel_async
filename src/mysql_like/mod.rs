@@ -48,6 +48,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     async fn batch_execute(&mut self, query: &str) -> diesel::QueryResult<()> {
         self.instrumentation()
@@ -58,7 +59,7 @@ where
             .conn
             .query_drop(query)
             .await
-            .map_err(ErrorHelper)
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))
             .map_err(Into::into);
         self.instrumentation()
             .on_connection_event(InstrumentationEvent::finish_query(
@@ -81,6 +82,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     type ExecuteFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<usize>>;
     type LoadFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<Self::Stream<'conn, 'query>>>;
@@ -112,7 +114,9 @@ where
     {
         self.with_prepared_statement(source, |conn, stmt, binds| async move {
             let params = mysql_async::Params::try_from(binds)?;
-            conn.exec_drop(&*stmt, params).await.map_err(ErrorHelper)?;
+            conn.exec_drop(&*stmt, params)
+                .await
+                .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
             conn.affected_rows()
                 .try_into()
                 .map_err(|e| diesel::result::Error::DeserializationError(Box::new(e)))
@@ -125,6 +129,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     type TransactionManager = AnsiTransactionManager;
 
@@ -177,12 +182,14 @@ fn update_transaction_manager_status<T>(
     query_result
 }
 
-fn prepare_statement_helper<'a>(
+fn prepare_statement_helper<'a, DB: MysqlLikeBackend>(
     conn: &'a mut mysql_async::Conn,
     sql: &str,
     _is_for_cache: diesel::connection::statement_cache::PrepareForCache,
     _metadata: &[MysqlType],
 ) -> CallbackHelper<impl Future<Output = QueryResult<(Statement, &'a mut mysql_async::Conn)>> + Send>
+where
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     // ideally we wouldn't clone the SQL string here
     // but as we usually cache statements anyway
@@ -192,7 +199,10 @@ fn prepare_statement_helper<'a>(
     // the right result lifetime anymore (at least not easily)
     let sql = sql.to_owned();
     CallbackHelper(async move {
-        let s = conn.prep(sql).await.map_err(ErrorHelper)?;
+        let s = conn
+            .prep(sql)
+            .await
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
         Ok((s, conn))
     })
 }
@@ -204,6 +214,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     /// Wrap an existing [`mysql_async::Conn`] into a async diesel mysql connection
     ///
@@ -230,11 +241,15 @@ where
     }
 
     /// Constructs a cancellation token that can later be used to request cancellation of a query running on the connection associated with this client.
-    pub fn cancel_token(&self) -> MysqlLikeCancelToken {
+    pub fn cancel_token(&self) -> MysqlLikeCancelToken<DB> {
         let kill_id = self.conn.id();
         let opts = self.conn.opts().clone();
 
-        MysqlLikeCancelToken { kill_id, opts }
+        MysqlLikeCancelToken {
+            kill_id,
+            opts,
+            phantom: PhantomData,
+        }
     }
 
     fn with_prepared_statement<'conn, T, F, R>(
@@ -289,7 +304,9 @@ where
             // next, so you would need to have `max_prepared_stmt_count - 1` other statements open for this to cause issues.
             // This is hopefully not a problem in practice
             for stmt in std::mem::take(stmt_to_free) {
-                conn.close(stmt).await.map_err(ErrorHelper)?;
+                conn.close(stmt)
+                    .await
+                    .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
             }
             let RawBytesBindCollector {
                 metadata, binds, ..
@@ -360,18 +377,18 @@ where
         let res = conn
             .exec_iter(stmt_for_exec, params)
             .await
-            .map_err(ErrorHelper)?;
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
 
         let stream = res
             .stream_and_drop::<MysqlLikeRow<DB>>()
             .await
-            .map_err(ErrorHelper)?
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?
             .ok_or_else(|| {
                 diesel::result::Error::DeserializationError(Box::new(
                     diesel::result::UnexpectedEndOfRow,
                 ))
             })?
-            .map_err(|e| diesel::result::Error::from(ErrorHelper(e)));
+            .map_err(|e| diesel::result::Error::from(ErrorHelper(e, PhantomData::<DB>)));
 
         Ok(stream)
     }
@@ -388,7 +405,9 @@ where
             .stmt_cache_size(0) // We have our own cache
             .client_found_rows(true); // This allows a consistent behavior between MariaDB/MySQL and PostgreSQL (and is already set in `diesel`)
 
-        let conn = mysql_async::Conn::new(builder).await.map_err(ErrorHelper)?;
+        let conn = mysql_async::Conn::new(builder)
+            .await
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
 
         Ok(AsyncMysqlLikeConnection {
             conn,
@@ -409,6 +428,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     fn to_any<'a>(
         lookup: &mut <Self::Backend as TypeMetadata>::MetadataLookup,
@@ -435,6 +455,7 @@ where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
+    diesel::result::Error: From<ErrorHelper<DB>>,
 {
 }
 

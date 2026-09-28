@@ -1,3 +1,6 @@
+use core::marker::PhantomData;
+
+use diesel::mysql_like::MysqlLikeBackend;
 use mysql_async::prelude::Query;
 use mysql_async::{Opts, OptsBuilder};
 
@@ -6,12 +9,17 @@ use crate::mysql_like::error_helper::ErrorHelper;
 /// The capability to request cancellation of in-progress queries on a
 /// connection.
 #[derive(Clone)]
-pub struct MysqlLikeCancelToken {
+pub struct MysqlLikeCancelToken<DB: MysqlLikeBackend> {
     pub(crate) opts: Opts,
     pub(crate) kill_id: u32,
+    pub(crate) phantom: PhantomData<DB>,
 }
 
-impl MysqlLikeCancelToken {
+#[expect(private_bounds)]
+impl<DB: MysqlLikeBackend> MysqlLikeCancelToken<DB>
+where
+    diesel::result::Error: From<ErrorHelper<DB>>,
+{
     /// Attempts to cancel the in-progress query on the connection associated
     /// with this `CancelToken`.
     ///
@@ -25,12 +33,14 @@ impl MysqlLikeCancelToken {
     pub async fn cancel_query(&self) -> diesel::result::ConnectionResult<()> {
         let builder = OptsBuilder::from_opts(self.opts.clone());
 
-        let conn = mysql_async::Conn::new(builder).await.map_err(ErrorHelper)?;
+        let conn = mysql_async::Conn::new(builder)
+            .await
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
 
         format!("KILL QUERY {};", self.kill_id)
             .ignore(conn)
             .await
-            .map_err(ErrorHelper)?;
+            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
 
         Ok(())
     }
