@@ -69,7 +69,7 @@ features = [
 version = "2.3.0"
 
 [features]
-default = ["mariadb", "mysql"]
+default = []
 mysql = [
   "diesel/mysql_backend",
   "__mysql_like_shared",
