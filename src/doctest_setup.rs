@@ -246,7 +246,7 @@ cfg_if::cfg_if! {
             connection
         }
 
-    }else if #[cfg(feature = "mariadb")] {
+    } else if #[cfg(feature = "mariadb")] {
         use diesel_async::AsyncMariadbConnection;
         #[allow(dead_code)]
         type DB = diesel::mariadb::Mariadb;

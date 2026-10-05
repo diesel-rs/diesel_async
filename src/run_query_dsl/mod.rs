@@ -1,5 +1,7 @@
 mod utils;
 
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+use crate::mysql_like::MysqlLikeAsyncBackend;
 use crate::AsyncConnectionCore;
 use diesel::associations::HasTable;
 use diesel::query_builder::IntoUpdateTarget;
@@ -699,9 +701,9 @@ where
         Self: 'changes;
 }
 
-#[cfg(feature = "mysql")]
-impl<'b, Changes, Output, Tab, V> UpdateAndFetchResults<Changes, Output>
-    for crate::AsyncMysqlConnection
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+impl<'b, Changes, Output, Tab, V, DB> UpdateAndFetchResults<Changes, Output>
+    for crate::mysql_like::AsyncMysqlLikeConnection<DB>
 where
     Output: Send + 'static,
     Changes:
@@ -712,52 +714,13 @@ where
         diesel::query_builder::AsQuery,
     diesel::dsl::Update<Changes, Changes>: methods::ExecuteDsl<Self>,
     V: Send + 'b,
+    DB: MysqlLikeAsyncBackend,
+    Self: AsyncConnectionCore,
     Changes::Changeset: Send + 'b,
     Changes::Id: 'b,
     Tab::FromClause: Send,
-    diesel::dsl::Find<Changes::Table, Changes::Id>: methods::LoadQuery<'b, crate::AsyncMysqlConnection, Output>
-        + RunQueryDsl<crate::AsyncMysqlConnection>
-        + Send,
-{
-    fn update_and_fetch<'conn, 'changes>(
-        &'conn mut self,
-        changeset: Changes,
-    ) -> BoxFuture<'changes, QueryResult<Output>>
-    where
-        Changes: 'changes,
-        Changes::Changeset: 'changes,
-        'conn: 'changes,
-        Self: 'changes,
-    {
-        async move {
-            diesel::update(changeset)
-                .set(changeset)
-                .execute(self)
-                .await?;
-            Changes::table().find(changeset.id()).get_result(self).await
-        }
-        .boxed()
-    }
-}
-
-#[cfg(feature = "mariadb")]
-impl<'b, Changes, Output, Tab, V> UpdateAndFetchResults<Changes, Output>
-    for crate::AsyncMariadbConnection
-where
-    Output: Send + 'static,
-    Changes:
-        Copy + AsChangeset<Target = Tab> + Send + diesel::associations::Identifiable<Table = Tab>,
-    Tab: diesel::Table + diesel::query_dsl::methods::FindDsl<Changes::Id> + 'b,
-    diesel::dsl::Find<Tab, Changes::Id>: IntoUpdateTarget<Table = Tab, WhereClause = V>,
-    diesel::query_builder::UpdateStatement<Tab, V, Changes::Changeset>:
-        diesel::query_builder::AsQuery,
-    diesel::dsl::Update<Changes, Changes>: methods::ExecuteDsl<Self>,
-    V: Send + 'b,
-    Changes::Changeset: Send + 'b,
-    Changes::Id: 'b,
-    Tab::FromClause: Send,
-    diesel::dsl::Find<Changes::Table, Changes::Id>: methods::LoadQuery<'b, crate::AsyncMariadbConnection, Output>
-        + RunQueryDsl<crate::AsyncMariadbConnection>
+    diesel::dsl::Find<Changes::Table, Changes::Id>: methods::LoadQuery<'b, crate::mysql_like::AsyncMysqlLikeConnection<DB>, Output>
+        + RunQueryDsl<crate::mysql_like::AsyncMysqlLikeConnection<DB>>
         + Send,
 {
     fn update_and_fetch<'conn, 'changes>(

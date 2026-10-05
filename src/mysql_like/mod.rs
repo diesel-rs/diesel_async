@@ -43,12 +43,26 @@ pub struct AsyncMysqlLikeConnection<DB: MysqlLikeBackend> {
     stmt_to_free: Vec<mysql_async::Statement>,
 }
 
-impl<DB: MysqlLikeBackend> SimpleAsyncConnection for AsyncMysqlLikeConnection<DB>
+/// A trait for backends which implement the MySQL wire protocol. This is implemented for both MySQL and MariaDB,
+/// and can be used when writing async code that is compatible with both backends.
+#[expect(private_bounds)]
+pub trait MysqlLikeAsyncBackend: MysqlLikeBackend
+where
+    Self: Send + Sync + Unpin,
+    Self: UrlHelper,
+{
+}
+
+impl<DB: MysqlLikeBackend> MysqlLikeAsyncBackend for DB
 where
     DB: Send + Sync + Unpin,
     DB: UrlHelper,
+{
+}
+
+impl<DB: MysqlLikeAsyncBackend> SimpleAsyncConnection for AsyncMysqlLikeConnection<DB>
+where
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     async fn batch_execute(&mut self, query: &str) -> diesel::QueryResult<()> {
         self.instrumentation()
@@ -59,7 +73,7 @@ where
             .conn
             .query_drop(query)
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))
+            .map_err(ErrorHelper::<DB>::new)
             .map_err(Into::into);
         self.instrumentation()
             .on_connection_event(InstrumentationEvent::finish_query(
@@ -77,12 +91,9 @@ const CONNECTION_SETUP_QUERIES: &[&str] = &[
     "SET character_set_results = 'utf8mb4'",
 ];
 
-impl<DB: MysqlLikeBackend> AsyncConnectionCore for AsyncMysqlLikeConnection<DB>
+impl<DB: MysqlLikeAsyncBackend> AsyncConnectionCore for AsyncMysqlLikeConnection<DB>
 where
-    DB: Send + Sync + Unpin,
-    DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     type ExecuteFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<usize>>;
     type LoadFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<Self::Stream<'conn, 'query>>>;
@@ -116,7 +127,7 @@ where
             let params = mysql_async::Params::try_from(binds)?;
             conn.exec_drop(&*stmt, params)
                 .await
-                .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+                .map_err(ErrorHelper::<DB>::new)?;
             conn.affected_rows()
                 .try_into()
                 .map_err(|e| diesel::result::Error::DeserializationError(Box::new(e)))
@@ -124,12 +135,9 @@ where
     }
 }
 
-impl<DB: MysqlLikeBackend> AsyncConnection for AsyncMysqlLikeConnection<DB>
+impl<DB: MysqlLikeAsyncBackend> AsyncConnection for AsyncMysqlLikeConnection<DB>
 where
-    DB: Send + Sync + Unpin,
-    DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     type TransactionManager = AnsiTransactionManager;
 
@@ -182,14 +190,12 @@ fn update_transaction_manager_status<T>(
     query_result
 }
 
-fn prepare_statement_helper<'a, DB: MysqlLikeBackend>(
+fn prepare_statement_helper<'a, DB: MysqlLikeAsyncBackend>(
     conn: &'a mut mysql_async::Conn,
     sql: &str,
     _is_for_cache: diesel::connection::statement_cache::PrepareForCache,
     _metadata: &[MysqlType],
 ) -> CallbackHelper<impl Future<Output = QueryResult<(Statement, &'a mut mysql_async::Conn)>> + Send>
-where
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     // ideally we wouldn't clone the SQL string here
     // but as we usually cache statements anyway
@@ -199,22 +205,15 @@ where
     // the right result lifetime anymore (at least not easily)
     let sql = sql.to_owned();
     CallbackHelper(async move {
-        let s = conn
-            .prep(sql)
-            .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+        let s = conn.prep(sql).await.map_err(ErrorHelper::<DB>::new)?;
         Ok((s, conn))
     })
 }
 
 #[expect(private_bounds)]
-impl<DB> AsyncMysqlLikeConnection<DB>
+impl<DB: MysqlLikeAsyncBackend> AsyncMysqlLikeConnection<DB>
 where
-    DB: MysqlLikeBackend,
-    DB: Send + Sync + Unpin,
-    DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     /// Wrap an existing [`mysql_async::Conn`] into a async diesel mysql connection
     ///
@@ -304,9 +303,7 @@ where
             // next, so you would need to have `max_prepared_stmt_count - 1` other statements open for this to cause issues.
             // This is hopefully not a problem in practice
             for stmt in std::mem::take(stmt_to_free) {
-                conn.close(stmt)
-                    .await
-                    .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+                conn.close(stmt).await.map_err(ErrorHelper::<DB>::new)?;
             }
             let RawBytesBindCollector {
                 metadata, binds, ..
@@ -325,7 +322,7 @@ where
                         &DB::default(),
                         &metadata,
                         conn,
-                        prepare_statement_helper,
+                        prepare_statement_helper::<DB>,
                         &mut **instrumentation,
                     )
                     .await?;
@@ -377,18 +374,18 @@ where
         let res = conn
             .exec_iter(stmt_for_exec, params)
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+            .map_err(ErrorHelper::<DB>::new)?;
 
         let stream = res
             .stream_and_drop::<MysqlLikeRow<DB>>()
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?
+            .map_err(ErrorHelper::<DB>::new)?
             .ok_or_else(|| {
                 diesel::result::Error::DeserializationError(Box::new(
                     diesel::result::UnexpectedEndOfRow,
                 ))
             })?
-            .map_err(|e| diesel::result::Error::from(ErrorHelper(e, PhantomData::<DB>)));
+            .map_err(|e| diesel::result::Error::from(ErrorHelper::<DB>::new(e)));
 
         Ok(stream)
     }
@@ -407,7 +404,7 @@ where
 
         let conn = mysql_async::Conn::new(builder)
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+            .map_err(ErrorHelper::<DB>::new)?;
 
         Ok(AsyncMysqlLikeConnection {
             conn,
@@ -423,12 +420,9 @@ pub(crate) trait UrlHelper: MysqlLikeBackend {
     fn check_and_replace_schema<'a>(url: &'a str) -> Result<Cow<'a, str>, UrlError>;
 }
 
-impl<DB: MysqlLikeBackend> AsyncMultiConnectionHelper for AsyncMysqlLikeConnection<DB>
+impl<DB: MysqlLikeAsyncBackend> AsyncMultiConnectionHelper for AsyncMysqlLikeConnection<DB>
 where
-    DB: Send + Sync + Unpin,
-    DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
     fn to_any<'a>(
         lookup: &mut <Self::Backend as TypeMetadata>::MetadataLookup,
@@ -449,13 +443,10 @@ where
     feature = "mobc",
     feature = "r2d2"
 ))]
-impl<DB: MysqlLikeBackend> crate::pooled_connection::PoolableConnection
+impl<DB: MysqlLikeAsyncBackend> crate::pooled_connection::PoolableConnection
     for AsyncMysqlLikeConnection<DB>
 where
-    DB: Send + Sync + Unpin,
-    DB: UrlHelper,
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
-    diesel::result::Error: From<ErrorHelper<DB>>,
 {
 }
 

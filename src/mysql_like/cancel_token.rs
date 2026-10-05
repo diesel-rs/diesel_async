@@ -35,12 +35,12 @@ where
 
         let conn = mysql_async::Conn::new(builder)
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+            .map_err(ErrorHelper::<DB>::new)?;
 
         format!("KILL QUERY {};", self.kill_id)
             .ignore(conn)
             .await
-            .map_err(|e| ErrorHelper(e, PhantomData::<DB>))?;
+            .map_err(ErrorHelper::<DB>::new)?;
 
         Ok(())
     }
