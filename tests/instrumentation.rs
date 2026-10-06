@@ -259,6 +259,51 @@ async fn check_events_transaction_nested() {
 
 #[cfg(feature = "postgres")]
 #[tokio::test]
+async fn check_events_are_emitted_for_load_with_error_while_reading_rows() {
+    use futures_util::TryStreamExt;
+
+    let (events_to_check, mut conn) = setup_test_case().await;
+    // PostgreSQL raises this error while it produces the rows,
+    // after the statement itself started successfully.
+    let query = diesel::sql_query("SELECT 1 / (n - 1) AS n FROM generate_series(1, 2) AS n");
+    let stream = AsyncConnectionCore::load(&mut conn, query).await.unwrap();
+    let rows = stream.try_collect::<Vec<_>>().await;
+    assert!(rows.is_err());
+
+    let events = events_to_check.lock().unwrap();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_matches!(events[0], Event::StartQuery { .. });
+    assert_matches!(events[1], Event::FinishQuery { error: Some(_), .. });
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn check_events_finish_query_for_load_is_emitted_after_rows_are_read() {
+    use futures_util::TryStreamExt;
+
+    let (events_to_check, mut conn) = setup_test_case().await;
+    let query = diesel::sql_query("SELECT n FROM generate_series(1, 3) AS n");
+    let stream = AsyncConnectionCore::load(&mut conn, query).await.unwrap();
+    assert!(
+        !events_to_check
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, Event::FinishQuery { .. })),
+        "FinishQuery must not be emitted before the rows are read"
+    );
+
+    let rows = stream.try_collect::<Vec<_>>().await.unwrap();
+    assert_eq!(rows.len(), 3);
+
+    let events = events_to_check.lock().unwrap();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_matches!(events[0], Event::StartQuery { .. });
+    assert_matches!(events[1], Event::FinishQuery { error: None, .. });
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
 async fn check_events_transaction_builder() {
     use crate::connection_without_transaction;
     use diesel::result::Error;
