@@ -1,23 +1,25 @@
+use core::marker::PhantomData;
 use diesel::backend::Backend;
-use diesel::mysql::data_types::{MysqlTime, MysqlTimestampType};
-use diesel::mysql::{Mysql, MysqlType, MysqlValue};
+use diesel::mysql_like::data_types::{MysqlTime, MysqlTimestampType};
+use diesel::mysql_like::MysqlLikeBackend;
+use diesel::mysql_like::{MysqlType, MysqlValue};
 use diesel::row::{PartialRow, RowIndex, RowSealed};
 use mysql_async::consts::{ColumnFlags, ColumnType};
 use mysql_async::{Column, Row, Value};
 use std::borrow::Cow;
 
-pub struct MysqlRow(pub(super) Row);
+pub struct MysqlLikeRow<DB: MysqlLikeBackend>(pub(super) Row, PhantomData<DB>);
 
-impl mysql_async::prelude::FromRow for MysqlRow {
+impl<DB: MysqlLikeBackend> mysql_async::prelude::FromRow for MysqlLikeRow<DB> {
     fn from_row_opt(row: Row) -> Result<Self, mysql_async::FromRowError>
     where
         Self: Sized,
     {
-        Ok(Self(row))
+        Ok(Self(row, PhantomData))
     }
 }
 
-impl RowIndex<usize> for MysqlRow {
+impl<DB: MysqlLikeBackend> RowIndex<usize> for MysqlLikeRow<DB> {
     fn idx(&self, idx: usize) -> Option<usize> {
         if idx < self.0.columns_ref().len() {
             Some(idx)
@@ -27,18 +29,18 @@ impl RowIndex<usize> for MysqlRow {
     }
 }
 
-impl<'a> RowIndex<&'a str> for MysqlRow {
+impl<'a, DB: MysqlLikeBackend> RowIndex<&'a str> for MysqlLikeRow<DB> {
     fn idx(&self, idx: &'a str) -> Option<usize> {
         self.0.columns().iter().position(|c| c.name_str() == idx)
     }
 }
 
-impl RowSealed for MysqlRow {}
+impl<DB: MysqlLikeBackend> RowSealed for MysqlLikeRow<DB> {}
 
-impl<'a> diesel::row::Row<'a, Mysql> for MysqlRow {
+impl<'a, DB: MysqlLikeBackend> diesel::row::Row<'a, DB> for MysqlLikeRow<DB> {
     type InnerPartialRow = Self;
     type Field<'b>
-        = MysqlField<'b>
+        = MysqlLikeField<'b, DB>
     where
         Self: 'b,
         'a: 'b;
@@ -105,31 +107,33 @@ impl<'a> diesel::row::Row<'a, Mysql> for MysqlRow {
                 Some(Cow::Owned(buffer))
             }
         };
-        let field = MysqlField {
+        let field = MysqlLikeField {
             value: buffer,
             column,
             name: column.name_str(),
+            _phantom: PhantomData,
         };
         Some(field)
     }
 
     fn partial_row(&self, range: std::ops::Range<usize>) -> PartialRow<'_, Self::InnerPartialRow> {
-        PartialRow::new(self, range)
+        PartialRow::new::<DB>(self, range)
     }
 }
 
-pub struct MysqlField<'a> {
+pub struct MysqlLikeField<'a, DB> {
     value: Option<Cow<'a, [u8]>>,
     column: &'a Column,
     name: Cow<'a, str>,
+    _phantom: PhantomData<DB>,
 }
 
-impl diesel::row::Field<'_, Mysql> for MysqlField<'_> {
+impl<DB: MysqlLikeBackend> diesel::row::Field<'_, DB> for MysqlLikeField<'_, DB> {
     fn field_name(&self) -> Option<&str> {
         Some(&*self.name)
     }
 
-    fn value(&self) -> Option<<Mysql as Backend>::RawValue<'_>> {
+    fn value(&self) -> Option<<DB as Backend>::RawValue<'_>> {
         self.value.as_ref().map(|v| {
             MysqlValue::new(
                 v,

@@ -59,7 +59,7 @@ async fn check_big_int() {
     type_check::<_, sql_types::BigInt>(conn, i64::MAX).await;
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn check_tiny_int() {
     let conn = &mut connection().await;
@@ -77,7 +77,7 @@ async fn check_tiny_int() {
     assert!(res);
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn check_unsigned_tiny_int() {
     let conn = &mut connection().await;
@@ -86,7 +86,7 @@ async fn check_unsigned_tiny_int() {
     type_check::<_, sql_types::Unsigned<sql_types::TinyInt>>(conn, u8::MAX).await;
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn check_unsigned_small_int() {
     let conn = &mut connection().await;
@@ -95,7 +95,7 @@ async fn check_unsigned_small_int() {
     type_check::<_, sql_types::Unsigned<sql_types::SmallInt>>(conn, u16::MAX).await;
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn check_unsigned_int() {
     let conn = &mut connection().await;
@@ -104,7 +104,7 @@ async fn check_unsigned_int() {
     type_check::<_, sql_types::Unsigned<sql_types::Integer>>(conn, u32::MAX).await;
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn check_unsigned_big_int() {
     let conn = &mut connection().await;
@@ -193,7 +193,7 @@ async fn test_time() {
     .await;
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn test_datetime() {
     let conn = &mut connection().await;

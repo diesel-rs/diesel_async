@@ -108,21 +108,31 @@ use transaction_manager::AsyncFunc;
 #[cfg(feature = "async-connection-wrapper")]
 pub mod async_connection_wrapper;
 mod deref_connection;
+#[cfg(feature = "mariadb")]
+mod mariadb;
 #[cfg(feature = "migrations")]
 mod migrations;
 #[cfg(feature = "mysql")]
 mod mysql;
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+mod mysql_like;
 #[cfg(feature = "postgres")]
 pub mod pg;
 #[cfg(feature = "pool")]
 pub mod pooled_connection;
 mod run_query_dsl;
-#[cfg(any(feature = "postgres", feature = "mysql"))]
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "mariadb"))]
 mod stmt_cache;
 #[cfg(feature = "sync-connection-wrapper")]
 pub mod sync_connection_wrapper;
 mod transaction_manager;
 
+#[cfg(feature = "mariadb")]
+#[doc(inline)]
+pub use self::mariadb::AsyncMariadbConnection;
+#[cfg(feature = "mariadb")]
+#[doc(inline)]
+pub use self::mariadb::MariadbCancelToken;
 #[cfg(feature = "mysql")]
 #[doc(inline)]
 pub use self::mysql::AsyncMysqlConnection;

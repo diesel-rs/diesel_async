@@ -1,12 +1,19 @@
 mod utils;
 
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+use crate::mysql_like::MysqlLikeAsyncBackend;
 use crate::AsyncConnectionCore;
 use diesel::associations::HasTable;
 use diesel::query_builder::IntoUpdateTarget;
 use diesel::result::QueryResult;
 use diesel::AsChangeset;
 use futures_core::future::BoxFuture;
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "sqlite"))]
+#[cfg(any(
+    feature = "mysql",
+    feature = "mariadb",
+    feature = "postgres",
+    feature = "sqlite"
+))]
 use futures_util::FutureExt;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use std::future::Future;
@@ -694,9 +701,9 @@ where
         Self: 'changes;
 }
 
-#[cfg(feature = "mysql")]
-impl<'b, Changes, Output, Tab, V> UpdateAndFetchResults<Changes, Output>
-    for crate::AsyncMysqlConnection
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+impl<'b, Changes, Output, Tab, V, DB> UpdateAndFetchResults<Changes, Output>
+    for crate::mysql_like::AsyncMysqlLikeConnection<DB>
 where
     Output: Send + 'static,
     Changes:
@@ -707,11 +714,13 @@ where
         diesel::query_builder::AsQuery,
     diesel::dsl::Update<Changes, Changes>: methods::ExecuteDsl<Self>,
     V: Send + 'b,
+    DB: MysqlLikeAsyncBackend,
+    Self: AsyncConnectionCore,
     Changes::Changeset: Send + 'b,
     Changes::Id: 'b,
     Tab::FromClause: Send,
-    diesel::dsl::Find<Changes::Table, Changes::Id>: methods::LoadQuery<'b, crate::AsyncMysqlConnection, Output>
-        + RunQueryDsl<crate::AsyncMysqlConnection>
+    diesel::dsl::Find<Changes::Table, Changes::Id>: methods::LoadQuery<'b, crate::mysql_like::AsyncMysqlLikeConnection<DB>, Output>
+        + RunQueryDsl<crate::mysql_like::AsyncMysqlLikeConnection<DB>>
         + Send,
 {
     fn update_and_fetch<'conn, 'changes>(

@@ -1,16 +1,20 @@
-use diesel::mysql::data_types::MysqlTime;
-use diesel::mysql::MysqlType;
-use diesel::mysql::MysqlValue;
+use core::marker::PhantomData;
+use diesel::data_types::MysqlTime;
+use diesel::mysql_like::MysqlType;
+use diesel::mysql_like::{MysqlLikeBackend, MysqlValue};
 use diesel::QueryResult;
 use mysql_async::{Params, Value};
 use std::convert::TryInto;
 
-pub(super) struct ToSqlHelper {
+pub(super) struct ToSqlHelper<DB: MysqlLikeBackend> {
     pub(super) metadata: Vec<MysqlType>,
     pub(super) binds: Vec<Option<Vec<u8>>>,
+    pub(super) _phantom: PhantomData<DB>,
 }
 
-fn to_value((metadata, bind): (MysqlType, Option<Vec<u8>>)) -> QueryResult<Value> {
+fn to_value<DB: MysqlLikeBackend>(
+    (metadata, bind): (MysqlType, Option<Vec<u8>>),
+) -> QueryResult<Value> {
     let cast_helper = |e| diesel::result::Error::SerializationError(Box::new(e));
     let v = match bind {
         Some(bind) => match metadata {
@@ -33,11 +37,11 @@ fn to_value((metadata, bind): (MysqlType, Option<Vec<u8>>)) -> QueryResult<Value
             MysqlType::Double => Value::Double(f64::from_ne_bytes(bind.try_into().unwrap())),
 
             MysqlType::Time => {
-                let time: MysqlTime = diesel::deserialize::FromSql::<
-                    diesel::sql_types::Time,
-                    diesel::mysql::Mysql,
-                >::from_sql(MysqlValue::new(&bind, metadata))
-                .expect("This does not fail");
+                let time: MysqlTime =
+                    diesel::deserialize::FromSql::<diesel::sql_types::Time, DB>::from_sql(
+                        MysqlValue::new(&bind, metadata),
+                    )
+                    .expect("This does not fail");
                 Value::Time(
                     time.neg,
                     time.day,
@@ -50,7 +54,7 @@ fn to_value((metadata, bind): (MysqlType, Option<Vec<u8>>)) -> QueryResult<Value
             MysqlType::Date | MysqlType::DateTime | MysqlType::Timestamp => {
                 let time: MysqlTime = diesel::deserialize::FromSql::<
                     diesel::sql_types::Timestamp,
-                    diesel::mysql::Mysql,
+                    DB,
                 >::from_sql(MysqlValue::new(&bind, metadata))
                 .expect("This does not fail");
                 Value::Date(
@@ -76,14 +80,20 @@ fn to_value((metadata, bind): (MysqlType, Option<Vec<u8>>)) -> QueryResult<Value
     Ok(v)
 }
 
-impl TryFrom<ToSqlHelper> for Params {
+impl<DB: MysqlLikeBackend> TryFrom<ToSqlHelper<DB>> for Params {
     type Error = diesel::result::Error;
 
-    fn try_from(ToSqlHelper { metadata, binds }: ToSqlHelper) -> Result<Self, Self::Error> {
+    fn try_from(
+        ToSqlHelper {
+            metadata,
+            binds,
+            _phantom,
+        }: ToSqlHelper<DB>,
+    ) -> Result<Self, Self::Error> {
         let values = metadata
             .into_iter()
             .zip(binds)
-            .map(to_value)
+            .map(to_value::<DB>)
             .collect::<Result<Vec<_>, Self::Error>>()?;
         Ok(Params::Positional(values))
     }

@@ -93,6 +93,8 @@ struct User {
 
 #[cfg(feature = "mysql")]
 type TestConnection = AsyncMysqlConnection;
+#[cfg(feature = "mariadb")]
+type TestConnection = AsyncMariadbConnection;
 #[cfg(feature = "postgres")]
 type TestConnection = AsyncPgConnection;
 #[cfg(feature = "sqlite")]
@@ -165,7 +167,7 @@ async fn postgres_cancel_token() {
     }
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 #[tokio::test]
 async fn mysql_cancel_token() {
     use diesel::result::{DatabaseErrorKind, Error};
@@ -252,7 +254,7 @@ async fn setup(connection: &mut TestConnection) {
     .unwrap();
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
 async fn setup(connection: &mut TestConnection) {
     diesel::sql_query(
         "CREATE TEMPORARY TABLE users (
@@ -272,7 +274,7 @@ async fn connection() -> TestConnection {
         conn.begin_test_transaction().await.unwrap();
     }
     setup(&mut conn).await;
-    if cfg!(feature = "mysql") || cfg!(feature = "sqlite") {
+    if cfg!(feature = "mysql") || cfg!(feature = "mariadb") || cfg!(feature = "sqlite") {
         // mysql does not allow this and does even automatically close
         // any open transaction. As of this we open a transaction **after**
         // we setup the schema

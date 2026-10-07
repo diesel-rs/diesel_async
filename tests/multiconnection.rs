@@ -8,6 +8,8 @@ use diesel_async::{AsyncConnection, RunQueryDsl};
 #[cfg(feature = "sqlite")]
 type SqliteConn =
     diesel_async::sync_connection_wrapper::SyncConnectionWrapper<diesel::sqlite::SqliteConnection>;
+#[cfg(feature = "mariadb")]
+use diesel_async::AsyncMariadbConnection;
 #[cfg(feature = "mysql")]
 use diesel_async::AsyncMysqlConnection;
 #[cfg(feature = "postgres")]
@@ -20,6 +22,8 @@ pub enum InferConnection {
     Pg(AsyncPgConnection),
     #[cfg(feature = "mysql")]
     Mysql(AsyncMysqlConnection),
+    #[cfg(feature = "mariadb")]
+    Mariadb(AsyncMariadbConnection),
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteConn),
 }
@@ -148,6 +152,8 @@ async fn establish_connection() -> InferConnection {
         std::env::var("MYSQL_UNIT_TEST_DATABASE_URL").or_else(|_| std::env::var("DATABASE_URL"))
     } else if cfg!(feature = "postgres") {
         std::env::var("PG_DATABASE_URL").or_else(|_| std::env::var("DATABASE_URL"))
+    } else if cfg!(feature = "mariadb") {
+        std::env::var("MARIADB_UNIT_TEST_DATABASE_URL").or_else(|_| std::env::var("DATABASE_URL"))
     } else {
         Ok(std::env::var("DATABASE_URL").unwrap_or_else(|_| ":memory:".to_owned()))
     };
@@ -223,7 +229,31 @@ async fn make_test_table(conn: &mut InferConnection) {
                      `timestamp2` DATETIME,
                      `date2` DATE,\
                      `time2` TIME,\
-                     `numeric` NUMERIC
+                     `numeric` NUMERIC(65,30)
+                 )",
+            )
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+        #[cfg(feature = "mariadb")]
+        InferConnection::Mariadb(conn) => {
+            diesel::sql_query(
+                "CREATE TEMPORARY TABLE type_test( \
+                     `small_int` SMALLINT,\
+                     `integer` INT,\
+                     `big_int` BIGINT,\
+                     `float` FLOAT,\
+                     `double` DOUBLE,\
+                     `string` TEXT,\
+                     `blob` BLOB,\
+                     `timestamp1` DATETIME,
+                     `date1` DATE,\
+                     `time1` TIME,\
+                     `timestamp2` DATETIME,
+                     `date2` DATE,\
+                     `time2` TIME,\
+                     `numeric` NUMERIC(65,30)
                  )",
             )
             .execute(conn)
@@ -328,8 +358,10 @@ async fn type_checks() {
     assert_eq!(timestamp2, result.10);
     assert_eq!(time2, result.11);
     assert_eq!(date2, result.12);
-    #[cfg(not(feature = "mysql"))] // for whatever reason that's broken
+    #[cfg(not(any(feature = "mysql", feature = "mariadb")))]
     assert_eq!(numeric, result.13);
+    #[cfg(any(feature = "mysql", feature = "mariadb"))]
+    assert_eq!(numeric.with_scale(30), result.13);
 }
 
 #[allow(clippy::unnecessary_literal_unwrap)]
@@ -431,8 +463,10 @@ async fn nullable_type_checks() {
     assert_eq!(timestamp2, result.10);
     assert_eq!(time2, result.11);
     assert_eq!(date2, result.12);
-    #[cfg(not(feature = "mysql"))] // for whatever reason that's broken
+    #[cfg(not(any(feature = "mysql", feature = "mariadb")))]
     assert_eq!(numeric, result.13);
+    #[cfg(any(feature = "mysql", feature = "mariadb"))]
+    assert_eq!(numeric.map(|numeric| numeric.with_scale(30)), result.13);
 
     diesel::delete(type_test::table)
         .execute(&mut conn)
@@ -495,15 +529,16 @@ async fn nullable_type_checks() {
 }
 
 #[tokio::test]
-#[cfg(not(feature = "mysql"))] // such binds are broken for mysql + multiconnection
 async fn contains_binds() {
     use diesel::connection::InstrumentationEvent;
 
     let mut conn = establish_connection().await;
     conn.set_instrumentation(|event: InstrumentationEvent<'_>| {
         if let InstrumentationEvent::StartQuery { query, .. } = event {
-            #[cfg(any(feature = "sqlite", feature = "mysql"))]
+            #[cfg(feature = "sqlite")]
             assert_eq!(query.to_string(), "SELECT ? -- binds: [I32(1)]");
+            #[cfg(any(feature = "mysql", feature = "mariadb"))]
+            assert_eq!(query.to_string(), "SELECT ? -- binds: [1]");
             #[cfg(feature = "postgres")]
             assert_eq!(query.to_string(), "SELECT $1 -- binds: [1]");
         }
@@ -517,8 +552,6 @@ async fn contains_binds() {
 }
 
 #[tokio::test]
-// mysql struggles with selects without from
-#[cfg(not(feature = "mysql"))]
 async fn check_enum_works() {
     #[derive(Debug, Clone, Copy, diesel::types::Enum, PartialEq)]
     #[diesel(sql_type = diesel::sql_types::Text)]
