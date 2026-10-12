@@ -25,14 +25,16 @@ use diesel::result::{DatabaseErrorKind, Error};
 use diesel::sql_types::TypeMetadata;
 use diesel::{ConnectionError, ConnectionResult, QueryResult};
 use futures_core::future::BoxFuture;
-use futures_core::stream::BoxStream;
+use futures_core::stream::{BoxStream, Stream};
 use futures_util::future::Either;
 use futures_util::stream::TryStreamExt;
 use futures_util::TryFutureExt;
 use futures_util::{FutureExt, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::types::Type;
@@ -351,6 +353,95 @@ async fn load_prepared(
         .boxed())
 }
 
+/// Decides when a successful query reports `FinishQuery`.
+trait FinishOnSuccess: Sized {
+    fn finish_on_success(
+        self,
+        sql: String,
+        instrumentation: Arc<std::sync::Mutex<DynInstrumentation>>,
+    ) -> Self;
+}
+
+/// `execute` has its complete result once the future resolves.
+impl FinishOnSuccess for usize {
+    fn finish_on_success(
+        self,
+        sql: String,
+        instrumentation: Arc<std::sync::Mutex<DynInstrumentation>>,
+    ) -> Self {
+        instrumentation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .on_connection_event(InstrumentationEvent::finish_query(
+                &StrQueryHelper::new(&sql),
+                None,
+            ));
+        self
+    }
+}
+
+/// `load` only has the first response here. Rows, and errors such as a
+/// statement timeout, can still arrive while the stream is read.
+impl FinishOnSuccess for BoxStream<'static, QueryResult<PgRow>> {
+    fn finish_on_success(
+        self,
+        sql: String,
+        instrumentation: Arc<std::sync::Mutex<DynInstrumentation>>,
+    ) -> Self {
+        Box::pin(InstrumentedRowStream {
+            inner: self,
+            sql,
+            instrumentation,
+            finished: false,
+        })
+    }
+}
+
+/// Reports `FinishQuery` once for a `load`: with the first error, at the end
+/// of the stream, or when the stream is dropped before its end.
+struct InstrumentedRowStream {
+    inner: BoxStream<'static, QueryResult<PgRow>>,
+    sql: String,
+    instrumentation: Arc<std::sync::Mutex<DynInstrumentation>>,
+    finished: bool,
+}
+
+impl InstrumentedRowStream {
+    fn finish(&mut self, error: Option<&Error>) {
+        if !self.finished {
+            self.finished = true;
+            self.instrumentation
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .on_connection_event(InstrumentationEvent::finish_query(
+                    &StrQueryHelper::new(&self.sql),
+                    error,
+                ));
+        }
+    }
+}
+
+impl Stream for InstrumentedRowStream {
+    type Item = QueryResult<PgRow>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let item = std::task::ready!(self.inner.as_mut().poll_next(cx));
+        match &item {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => self.finish(Some(error)),
+            None => self.finish(None),
+        }
+        Poll::Ready(item)
+    }
+}
+
+impl Drop for InstrumentedRowStream {
+    fn drop(&mut self) {
+        // The caller stopped reading before the end of the stream.
+        self.finish(None);
+    }
+}
+
 async fn execute_prepared(
     conn: &tokio_postgres::Client,
     stmt: Statement,
@@ -553,7 +644,7 @@ impl AsyncPgConnection {
     where
         T: QueryFragment<diesel::pg::Pg> + QueryId,
         F: Future<Output = QueryResult<R>> + Send + 'a,
-        R: Send,
+        R: Send + FinishOnSuccess,
     {
         self.record_instrumentation(InstrumentationEvent::start_query(&diesel::debug_query(
             &query,
@@ -591,7 +682,7 @@ impl AsyncPgConnection {
     ) -> BoxFuture<'a, QueryResult<R>>
     where
         F: Future<Output = QueryResult<R>> + Send + 'a,
-        R: Send,
+        R: Send + FinishOnSuccess,
     {
         let raw_connection = &self.conn;
         let stmt_cache = &self.stmt_cache;
@@ -700,16 +791,19 @@ impl AsyncPgConnection {
             };
             let res = res.await;
             let mut tm = tm.lock().await;
-            let r = update_transaction_manager_status(res, &mut tm);
-            instrumentation
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .on_connection_event(InstrumentationEvent::finish_query(
-                    &StrQueryHelper::new(&sql),
-                    r.as_ref().err(),
-                ));
-
-            r
+            match update_transaction_manager_status(res, &mut tm) {
+                Ok(result) => Ok(result.finish_on_success(sql, instrumentation)),
+                Err(error) => {
+                    instrumentation
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .on_connection_event(InstrumentationEvent::finish_query(
+                            &StrQueryHelper::new(&sql),
+                            Some(&error),
+                        ));
+                    Err(error)
+                }
+            }
         }
         .boxed()
     }
