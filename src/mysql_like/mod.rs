@@ -448,6 +448,15 @@ impl<DB: MysqlLikeAsyncBackend> crate::pooled_connection::PoolableConnection
 where
     QueryFragmentHelper: QueryFragmentForCachedStatement<DB>,
 {
+    fn is_broken(&mut self) -> bool {
+        use crate::TransactionManager;
+
+        // mysql_async marks a connection as disconnected while a command is in
+        // flight and clears the flag once the command completes. A command
+        // dropped midway (for example by a timeout) leaves it set, and its
+        // reply may still arrive on the connection, so it must not be reused.
+        Self::TransactionManager::is_broken_transaction_manager(self) || self.conn.is_disconnected()
+    }
 }
 
 #[cfg(test)]
