@@ -10,6 +10,7 @@ for Rust libraries in [RFC #1105](https://github.com/rust-lang/rfcs/blob/master/
 * Bump minimal supported Rust version to 1.88.0
 * Bump minimal supported `mysql_async` version to 0.37 (pulls in a patched `lru`, RUSTSEC-2026-0253)
 * Treat a MySQL or MariaDB connection whose last command was cancelled midway (for example by a timeout) as broken in the connection pool implementations, instead of handing it to the next borrower
+* Report the SQLSTATE of a MySQL or MariaDB server error through `DatabaseErrorInformation::sqlstate`
 
 ## [0.9.2] - 2026-06-19
 

@@ -213,6 +213,51 @@ async fn mysql_cancel_token() {
     }
 }
 
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+#[tokio::test]
+async fn mysql_sqlstate_reports_the_code_of_a_mapped_error() {
+    use diesel::result::{DatabaseErrorKind, Error};
+
+    let conn = &mut connection().await;
+    let user = (users::id.eq(1), users::name.eq("Sean"));
+
+    diesel::insert_into(users::table)
+        .values(user)
+        .execute(conn)
+        .await
+        .unwrap();
+    let err = diesel::insert_into(users::table)
+        .values(user)
+        .execute(conn)
+        .await
+        .unwrap_err();
+
+    let Error::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(info.sqlstate().unwrap().as_str(), "23000");
+}
+
+#[cfg(any(feature = "mysql", feature = "mariadb"))]
+#[tokio::test]
+async fn mysql_sqlstate_reports_a_custom_code_raised_by_signal() {
+    use diesel::result::{DatabaseErrorKind, Error};
+
+    let conn = &mut connection().await;
+
+    // MySQL rejects `SIGNAL` as a prepared statement, so it goes through the text protocol.
+    let err = conn
+        .batch_execute("SIGNAL SQLSTATE 'P1001' SET MESSAGE_TEXT = 'custom'")
+        .await
+        .unwrap_err();
+
+    let Error::DatabaseError(DatabaseErrorKind::Unknown, info) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(info.sqlstate().unwrap().as_str(), "P1001");
+    assert_eq!(info.message(), "custom");
+}
+
 #[cfg(feature = "sync-connection-wrapper")]
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_blocking_task() {
