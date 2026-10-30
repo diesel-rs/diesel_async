@@ -237,12 +237,13 @@ jobs:
           /opt/homebrew/opt/mariadb@11.4/bin/mysql -e "create database diesel_test; create database diesel_unit_test; grant all on \`diesel_%\`.* to 'runner'@'localhost';" -urunner
           echo "DATABASE_URL=mariadb://runner:diesel@localhost/diesel_test" >> $GITHUB_ENV
 
-      - name: Install postgres (Windows)
+      - name: Start postgres (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'postgres'
-        shell: bash
+        shell: pwsh
         run: |
-          choco install postgresql15 --force --params '/Password:root'
-          echo "DATABASE_URL=postgres://postgres:root@localhost/" >> $GITHUB_ENV
+          Set-Service -Name postgresql-x64-17 -StartupType Manual
+          Start-Service -Name postgresql-x64-17
+          "DATABASE_URL=postgres://postgres:root@localhost/" >> $env:GITHUB_ENV
 
       - name: Install mysql (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'mysql'
@@ -260,7 +261,12 @@ jobs:
         if: runner.os == 'Windows' && matrix.backend == 'mariadb'
         shell: bash
         run: |
-          choco install mariadb --version=12.3.2 -y
+          # community.chocolatey.org intermittently answers 504, so the install is retried
+          for attempt in 1 2 3 4; do
+            choco install mariadb --version=12.3.2 -y && break
+            if [ "$attempt" -eq 4 ]; then exit 1; fi
+            sleep $((attempt * 30))
+          done
           "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e "create database diesel_test;" -u root
           "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e "create database diesel_unit_test;" -u root
           "C:\\Program Files\\MariaDB 12.3\\bin\\mariadb" -e 'grant all on `diesel_%`.* to 'root'@'localhost';' -uroot
@@ -279,9 +285,19 @@ jobs:
 
       - name: Install sqlite (Windows)
         if: runner.os == 'Windows' && matrix.backend == 'sqlite'
+        shell: bash
+        run: |
+          # community.chocolatey.org intermittently answers 504, so the install is retried
+          for attempt in 1 2 3 4; do
+            choco install sqlite -y && break
+            if [ "$attempt" -eq 4 ]; then exit 1; fi
+            sleep $((attempt * 30))
+          done
+
+      - name: Build sqlite import library (Windows)
+        if: runner.os == 'Windows' && matrix.backend == 'sqlite'
         shell: cmd
         run: |
-          choco install sqlite
           cd /D C:\ProgramData\chocolatey\lib\SQLite\tools
           for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           lib /machine:x64 /def:sqlite3.def /out:sqlite3.lib
