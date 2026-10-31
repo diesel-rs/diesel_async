@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use diesel::result::SqlState;
 use diesel::ConnectionError;
 
 pub(super) struct ErrorHelper(pub(super) tokio_postgres::Error);
@@ -20,20 +21,20 @@ impl From<ErrorHelper> for diesel::result::Error {
 pub(super) fn from_tokio_postgres_error(
     postgres_error: Arc<tokio_postgres::Error>,
 ) -> diesel::result::Error {
+    use diesel::pg::sql_state;
     use diesel::result::DatabaseErrorKind::*;
-    use tokio_postgres::error::SqlState;
 
     match postgres_error.code() {
         Some(code) => {
-            let kind = match *code {
-                SqlState::UNIQUE_VIOLATION => UniqueViolation,
-                SqlState::FOREIGN_KEY_VIOLATION => ForeignKeyViolation,
-                SqlState::RESTRICT_VIOLATION => RestrictViolation,
-                SqlState::EXCLUSION_VIOLATION => ExclusionViolation,
-                SqlState::T_R_SERIALIZATION_FAILURE => SerializationFailure,
-                SqlState::READ_ONLY_SQL_TRANSACTION => ReadOnlyTransaction,
-                SqlState::NOT_NULL_VIOLATION => NotNullViolation,
-                SqlState::CHECK_VIOLATION => CheckViolation,
+            let kind = match parse_sqlstate(code) {
+                Some(sql_state::UNIQUE_VIOLATION) => UniqueViolation,
+                Some(sql_state::FOREIGN_KEY_VIOLATION) => ForeignKeyViolation,
+                Some(sql_state::RESTRICT_VIOLATION) => RestrictViolation,
+                Some(sql_state::EXCLUSION_VIOLATION) => ExclusionViolation,
+                Some(sql_state::T_R_SERIALIZATION_FAILURE) => SerializationFailure,
+                Some(sql_state::READ_ONLY_SQL_TRANSACTION) => ReadOnlyTransaction,
+                Some(sql_state::NOT_NULL_VIOLATION) => NotNullViolation,
+                Some(sql_state::CHECK_VIOLATION) => CheckViolation,
                 _ => Unknown,
             };
 
@@ -52,6 +53,10 @@ pub(super) fn from_tokio_postgres_error(
             Box::new(postgres_error.to_string()),
         ),
     }
+}
+
+fn parse_sqlstate(code: &tokio_postgres::error::SqlState) -> Option<SqlState> {
+    code.code().parse().ok()
 }
 
 struct PostgresDbErrorWrapper(tokio_postgres::error::DbError);
@@ -88,5 +93,9 @@ impl diesel::result::DatabaseErrorInformation for PostgresDbErrorWrapper {
                 position.try_into().ok()
             }
         })
+    }
+
+    fn sqlstate(&self) -> Option<SqlState> {
+        parse_sqlstate(self.0.code())
     }
 }

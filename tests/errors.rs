@@ -1,9 +1,10 @@
 use crate::connection;
 use assert_matches::assert_matches;
 use diesel::dsl::{delete, insert_into, sql};
+use diesel::pg::sql_state;
 use diesel::result::{DatabaseErrorKind, Error};
 use diesel::sql_types::Integer;
-use diesel::{table, Insertable};
+use diesel::{table, Insertable, IntoSql};
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 
 table! {
@@ -215,4 +216,38 @@ async fn check_violation_error_kind() {
         .unwrap_err();
 
     assert_matches!(err, Error::DatabaseError(kind, _) if kind == DatabaseErrorKind::CheckViolation);
+}
+
+#[tokio::test]
+async fn sqlstate_reports_the_code_of_an_unmapped_error() {
+    let connection = &mut connection().await;
+
+    let err = diesel::select(1.into_sql::<Integer>() / 0.into_sql::<Integer>())
+        .get_result::<i32>(connection)
+        .await
+        .unwrap_err();
+
+    let Error::DatabaseError(DatabaseErrorKind::Unknown, info) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(info.sqlstate(), Some(sql_state::DIVISION_BY_ZERO));
+}
+
+#[tokio::test]
+async fn sqlstate_reports_a_custom_code_raised_by_plpgsql() {
+    let connection = &mut connection().await;
+
+    // Raising an error with a custom code needs PL/pgSQL, which the DSL cannot express.
+    let err = connection
+        .batch_execute(
+            "DO $$ BEGIN RAISE EXCEPTION USING ERRCODE = 'P1001', MESSAGE = 'custom', DETAIL = 'kept'; END $$",
+        )
+        .await
+        .unwrap_err();
+
+    let Error::DatabaseError(DatabaseErrorKind::Unknown, info) = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(info.sqlstate().unwrap().as_str(), "P1001");
+    assert_eq!(info.details(), Some("kept"));
 }
