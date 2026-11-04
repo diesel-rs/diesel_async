@@ -12,6 +12,7 @@ for Rust libraries in [RFC #1105](https://github.com/rust-lang/rfcs/blob/master/
 * Treat a MySQL or MariaDB connection whose last command was cancelled midway (for example by a timeout) as broken in the connection pool implementations, instead of handing it to the next borrower
 * Report the SQLSTATE of a MySQL or MariaDB server error through `DatabaseErrorInformation::sqlstate`
 * Report the SQLSTATE of a PostgreSQL error through `DatabaseErrorInformation::sqlstate`
+* Map the PostgreSQL connection exception codes that `diesel::PgConnection` reports as `DatabaseErrorKind::ClosedConnection` to the same kind
 
 ## [0.9.2] - 2026-06-19
 
