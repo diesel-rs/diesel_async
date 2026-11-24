@@ -1,5 +1,8 @@
 # An async interface for diesel
 
+> [!IMPORTANT]
+> **This code is merged into the main diesel repository**
+
 Diesel gets rid of the boilerplate for database interaction and eliminates
 runtime errors without sacrificing performance. It takes full advantage of
 Rust's type system to create a low overhead query builder that "feels like
